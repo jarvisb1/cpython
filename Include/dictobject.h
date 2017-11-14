@@ -78,6 +78,13 @@ struct _dictobject {
      */
     Py_ssize_t ma_mask;
 
+    Py_ssize_t ma_collisions;  /* Collisions heuristic */
+
+    /* Indicates whether the dictionary was created under hash
+       randomization state or if it was randomized as a result of collision
+       threshold breach. */
+    Py_ssize_t ma_randomized;
+
     /* ma_table points to ma_smalltable for small tables, else to
      * additional malloc'ed memory.  ma_table is never NULL!  This rule
      * saves repeated runtime null-tests in the workhorse getitem and

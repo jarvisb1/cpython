@@ -210,11 +210,12 @@ show_track(void)
 #define INIT_NONZERO_DICT_SLOTS(mp) do {                                \
     (mp)->ma_table = (mp)->ma_smalltable;                               \
     (mp)->ma_mask = PyDict_MINSIZE - 1;                                 \
+    (mp)->ma_randomized = Py_HashRandomizationFlag;                     \
     } while(0)
 
 #define EMPTY_TO_MINSIZE(mp) do {                                       \
     memset((mp)->ma_smalltable, 0, sizeof((mp)->ma_smalltable));        \
-    (mp)->ma_used = (mp)->ma_fill = 0;                                  \
+    (mp)->ma_used = (mp)->ma_fill = (mp)->ma_collisions = 0;            \
     INIT_NONZERO_DICT_SLOTS(mp);                                        \
     } while(0)
 
@@ -292,6 +293,52 @@ PyDict_New(void)
     return (PyObject *)mp;
 }
 
+#define COLLISION_THRESHOLD 10
+/*
+ * Update the collision heuristic on the dict. If there was a collision,
+ * increment the collisions counter. Otherwise, decrement it. If the
+ * collisions counter is already at 0, do not decrement it further.
+ */
+static void
+update_collision_heuristic(PyDictObject *mp, int collision)
+{
+    if (collision)
+        mp->ma_collisions += 1;
+    else if (mp->ma_collisions)
+        mp->ma_collisions -= 1;
+}
+
+static void
+rehash_dict(PyDictObject *mp)
+{
+    /* Use dictresize with the same current size so that the table
+       gets rebuilt with randomized hashes. */
+    dictresize(mp, mp->ma_used);
+    mp->ma_randomized = 1;
+}
+
+static void
+check_collisions(PyDictObject *mp)
+{
+    if (Py_HashRandomizationFlag) {
+        /* Collision in another dict was detected which enabled
+           randomization, but this dict not yet randomized */
+        if (!mp->randomized)
+            rehash_dict(mp);
+    }
+    else {
+        /* Prevent the detector from going off on the small table, which will
+           quickly collide too frequently on its way to resizing up. */
+        if (mp->ma_mask > PyDict_MINSIZE) {
+            if (mp->ma_collisions > COLLISION_THRESHOLD) {
+                Py_HashRandomizationFlag++;
+                _PyRandom_Init();
+		rehash_dict(mp);
+            }
+        }
+    }
+}
+
 /*
 The basic lookup function used by all operations.
 This is based on Algorithm D from Knuth Vol. 3, Sec. 6.4.
@@ -358,6 +405,9 @@ lookdict(PyDictObject *mp, PyObject *key, register long hash)
         }
         freeslot = NULL;
     }
+
+    /* A collision was detected, so update the heuristic */
+    update_collision_heuristic(mp, (freeslot == NULL ? 1 : 0));
 
     /* In the loop, me_key == dummy is by far (factor of 100s) the
        least likely outcome, so test for that last. */
@@ -436,6 +486,9 @@ lookdict_string(PyDictObject *mp, PyObject *key, register long hash)
             return ep;
         freeslot = NULL;
     }
+
+    /* A collision was detected, so update the heuristic */
+    update_collision_heuristic(mp, (freeslot == NULL ? 1 : 0));
 
     /* In the loop, me_key == dummy is by far (factor of 100s) the
        least likely outcome, so test for that last. */
@@ -661,7 +714,12 @@ dictresize(PyDictObject *mp, Py_ssize_t minused)
     for (ep = oldtable; i > 0; ep++) {
         if (ep->me_value != NULL) {             /* active entry */
             --i;
-            insertdict_clean(mp, ep->me_key, (long)ep->me_hash,
+            insertdict_clean(mp,
+                             ep->me_key,
+                             ((Py_HashRandomizationFlag &&
+			       !mp->ma_randomized) ?
+                              PyObject_Hash(ep->me_key) :
+                              (long)ep->me_hash),
                              ep->me_value);
         }
         else if (ep->me_key != NULL) {          /* dummy entry */
@@ -799,6 +857,8 @@ dict_set_item_by_hash_or_entry(register PyObject *op, PyObject *key,
         if (insertdict_by_entry(mp, key, hash, ep, value) != 0)
             return -1;
     }
+    check_collisions(mp);
+
     /* If we added a key, we can safely resize.  Otherwise just return!
      * If fill >= 2/3 size, adjust size.  Normally, this doubles or
      * quaduples the size, but it's also possible for the dict to shrink
