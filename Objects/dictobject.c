@@ -304,21 +304,17 @@ PyDict_New(void)
 static void
 update_collision_heuristic(PyDictObject *mp, int collision)
 {
-    /*fprintf(stderr, "enter update_collision_heuristic: collision = %d\n", collision);*/
     if (collision) {
         mp->ma_collisions++;
-        /*fprintf(stderr, "%X: ma_collision incremented to %d\n", mp, mp->ma_collisions);*/
     }
     else if (mp->ma_collisions) {
         mp->ma_collisions--;
-        /*fprintf(stderr, "%X: ma_collision decremented to %d\n", mp, mp->ma_collisions);*/
     }
 }
 
 static void
 rehash_dict(PyDictObject *mp)
 {
-    /*fprintf(stderr, "enter rehash_dict\n");*/
     /* Use dictresize with the same current size so that the table
        gets rebuilt with randomized hashes. */
     dictresize(mp, mp->ma_used);
@@ -328,30 +324,22 @@ rehash_dict(PyDictObject *mp)
 static void
 check_collisions(PyDictObject *mp)
 {
-    /*fprintf(stderr, "enter check_collisions\n");*/
     if (Py_HashRandomizationFlag) {
-        /*fprintf(stderr, "hash randomization is enabled\n");*/
         /* Collision in another dict was detected which enabled
            randomization, but this dict not yet randomized */
         if (!mp->ma_randomized)
             rehash_dict(mp);
     }
     else {
-        /*fprintf(stderr, "hash randomization not enabled\n");*/
         /* Prevent the detector from going off on the small table, which will
            quickly collide too frequently on its way to resizing up. */
         if (mp->ma_mask > PyDict_MINSIZE) {
-            /*fprintf(stderr, "dict size (%d) big enough to check threshold (ma_collisions = %d)\n", mp->ma_mask+1, mp->ma_collisions);*/
             if (mp->ma_collisions > COLLISION_THRESHOLD) {
-                /*fprintf(stderr, "COLLISION_THRESHOLD BREACHED!\n");*/
                 Py_HashRandomizationFlag++;
                 _PyRandom_Init();
-		rehash_dict(mp);
+                rehash_dict(mp);
             }
         }
-        /*else {
-            fprintf(stderr, "dict size (%d) not big enough to check threshold\n", mp->ma_mask+1);
-        }*/
     }
 }
 
