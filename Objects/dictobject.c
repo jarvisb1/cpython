@@ -148,6 +148,8 @@ _PyDict_Dummy(void)
 /* forward declarations */
 static PyDictEntry *
 lookdict_string(PyDictObject *mp, PyObject *key, long hash);
+static int
+dictresize(PyDictObject *mp, Py_ssize_t minused);
 
 #ifdef SHOW_CONVERSION_COUNTS
 static long created = 0L;
@@ -293,7 +295,7 @@ PyDict_New(void)
     return (PyObject *)mp;
 }
 
-#define COLLISION_THRESHOLD 10
+#define COLLISION_THRESHOLD 50
 /*
  * Update the collision heuristic on the dict. If there was a collision,
  * increment the collisions counter. Otherwise, decrement it. If the
@@ -302,15 +304,21 @@ PyDict_New(void)
 static void
 update_collision_heuristic(PyDictObject *mp, int collision)
 {
-    if (collision)
-        mp->ma_collisions += 1;
-    else if (mp->ma_collisions)
-        mp->ma_collisions -= 1;
+    /*fprintf(stderr, "enter update_collision_heuristic: collision = %d\n", collision);*/
+    if (collision) {
+        mp->ma_collisions++;
+        /*fprintf(stderr, "%X: ma_collision incremented to %d\n", mp, mp->ma_collisions);*/
+    }
+    else if (mp->ma_collisions) {
+        mp->ma_collisions--;
+        /*fprintf(stderr, "%X: ma_collision decremented to %d\n", mp, mp->ma_collisions);*/
+    }
 }
 
 static void
 rehash_dict(PyDictObject *mp)
 {
+    /*fprintf(stderr, "enter rehash_dict\n");*/
     /* Use dictresize with the same current size so that the table
        gets rebuilt with randomized hashes. */
     dictresize(mp, mp->ma_used);
@@ -320,22 +328,30 @@ rehash_dict(PyDictObject *mp)
 static void
 check_collisions(PyDictObject *mp)
 {
+    /*fprintf(stderr, "enter check_collisions\n");*/
     if (Py_HashRandomizationFlag) {
+        /*fprintf(stderr, "hash randomization is enabled\n");*/
         /* Collision in another dict was detected which enabled
            randomization, but this dict not yet randomized */
-        if (!mp->randomized)
+        if (!mp->ma_randomized)
             rehash_dict(mp);
     }
     else {
+        /*fprintf(stderr, "hash randomization not enabled\n");*/
         /* Prevent the detector from going off on the small table, which will
            quickly collide too frequently on its way to resizing up. */
         if (mp->ma_mask > PyDict_MINSIZE) {
+            /*fprintf(stderr, "dict size (%d) big enough to check threshold (ma_collisions = %d)\n", mp->ma_mask+1, mp->ma_collisions);*/
             if (mp->ma_collisions > COLLISION_THRESHOLD) {
+                /*fprintf(stderr, "COLLISION_THRESHOLD BREACHED!\n");*/
                 Py_HashRandomizationFlag++;
                 _PyRandom_Init();
 		rehash_dict(mp);
             }
         }
+        /*else {
+            fprintf(stderr, "dict size (%d) not big enough to check threshold\n", mp->ma_mask+1);
+        }*/
     }
 }
 
@@ -377,8 +393,10 @@ lookdict(PyDictObject *mp, PyObject *key, register long hash)
 
     i = (size_t)hash & mask;
     ep = &ep0[i];
-    if (ep->me_key == NULL || ep->me_key == key)
+    if (ep->me_key == NULL || ep->me_key == key) {
+        update_collision_heuristic(mp, 0);
         return ep;
+    }
 
     if (ep->me_key == dummy)
         freeslot = ep;
@@ -391,8 +409,10 @@ lookdict(PyDictObject *mp, PyObject *key, register long hash)
             if (cmp < 0)
                 return NULL;
             if (ep0 == mp->ma_table && ep->me_key == startkey) {
-                if (cmp > 0)
+                if (cmp > 0) {
+                    update_collision_heuristic(mp, 0);
                     return ep;
+                }
             }
             else {
                 /* The compare did major nasty stuff to the
@@ -406,7 +426,6 @@ lookdict(PyDictObject *mp, PyObject *key, register long hash)
         freeslot = NULL;
     }
 
-    /* A collision was detected, so update the heuristic */
     update_collision_heuristic(mp, (freeslot == NULL ? 1 : 0));
 
     /* In the loop, me_key == dummy is by far (factor of 100s) the
@@ -477,13 +496,17 @@ lookdict_string(PyDictObject *mp, PyObject *key, register long hash)
     }
     i = hash & mask;
     ep = &ep0[i];
-    if (ep->me_key == NULL || ep->me_key == key)
+    if (ep->me_key == NULL || ep->me_key == key) {
+        update_collision_heuristic(mp, 0);
         return ep;
+    }
     if (ep->me_key == dummy)
         freeslot = ep;
     else {
-        if (ep->me_hash == hash && _PyString_Eq(ep->me_key, key))
+        if (ep->me_hash == hash && _PyString_Eq(ep->me_key, key)) {
+            update_collision_heuristic(mp, 0);
             return ep;
+        }
         freeslot = NULL;
     }
 
@@ -708,6 +731,7 @@ dictresize(PyDictObject *mp, Py_ssize_t minused)
     mp->ma_used = 0;
     i = mp->ma_fill;
     mp->ma_fill = 0;
+    mp->ma_collisions = 0;
 
     /* Copy the data over; this is refcount-neutral for active entries;
        dummy entries aren't copied over, of course */
