@@ -295,7 +295,7 @@ PyDict_New(void)
     return (PyObject *)mp;
 }
 
-#define COLLISION_THRESHOLD 50
+#define COLLISION_THRESHOLD 100
 /*
  * Update the collision heuristic on the dict. If there was a collision,
  * increment the collisions counter. Otherwise, decrement it. If the
