@@ -498,7 +498,6 @@ lookdict_string(PyDictObject *mp, PyObject *key, register long hash)
         freeslot = NULL;
     }
 
-    /* A collision was detected, so update the heuristic */
     update_collision_heuristic(mp, (freeslot == NULL ? 1 : 0));
 
     /* In the loop, me_key == dummy is by far (factor of 100s) the
